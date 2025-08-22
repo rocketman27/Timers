@@ -1,0 +1,37 @@
+// test/java/.../TestDataFactory.java
+package com.bnpparibas.tr.timer.testutil;
+
+import com.bnpparibas.tr.timer.common.entity.FilterCondition;
+import com.bnpparibas.tr.timer.entity.Timer;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+public class TestDataFactory {
+
+  public static Timer timer(String name, boolean active) {
+    var t = new Timer();
+    t.setName(name);
+    t.setGroupName("grp-" + name);
+    t.setTimeZone("Europe/London");
+    t.setTriggerTime("00 15 * * *"); // пример
+    t.setFilterCondition(fc(List.of("EU"), List.of("WEU"), List.of("DE"),
+                            List.of("EQUITY"), List.of("MODEL1"), List.of("TRADE")));
+    t.setPublishTime(null);
+    t.setIsActive(active);
+    return t;
+  }
+
+  public static FilterCondition fc(
+      List<String> regions, List<String> subregions, List<String> countries,
+      List<String> productTypes, List<String> bookingModels, List<String> flowTypes) {
+    var f = new FilterCondition();
+    f.setRegions(regions);
+    f.setSubregions(subregions);
+    f.setCountries(countries);
+    f.setProductTypes(productTypes);
+    f.setBookingModels(bookingModels);
+    f.setFlowTypes(flowTypes);
+    return f;
+  }
+}
