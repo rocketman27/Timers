@@ -1,107 +1,109 @@
-// src/test/java/.../web/TimerControllerTest.java
-package com.example.timers.web;
+package com.bnpparibas.tr.timer.web;
 
-import com.example.timers.dto.IdsRequest;
-import com.example.timers.dto.OperationResultDTO;
-import com.example.timers.service.TimerService;
+import com.bnpparibas.tr.timer.domain.Timer;
+import com.bnpparibas.tr.timer.dto.IdsRequest;
+import com.bnpparibas.tr.timer.repo.TimerRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
 import static org.hamcrest.Matchers.*;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-@WebMvcTest(TimerController.class)
-class TimerControllerTest {
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+class ControllerIT {
 
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper om;
+    @Autowired TimerRepository repo;
 
-    @MockBean TimerService timerService;
-
-    @Test
-    @DisplayName("suspend: 200 OK и корректный JSON при полном успехе")
-    void suspend_ok() throws Exception {
-        var req = new IdsRequest(List.of("A","B"));
-        var res = new OperationResultDTO("OK", "2 timers suspended",
-                List.of("A","B"), List.of());
-
-        Mockito.when(timerService.suspend(eq(req.ids()))).thenReturn(res);
-
-        mvc.perform(post("/api/timers/suspend")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(req)))
-           .andExpect(status().isOk())
-           .andExpect(jsonPath("$.status").value("OK"))
-           .andExpect(jsonPath("$.message").value("2 timers suspended"))
-           .andExpect(jsonPath("$.processedIds", hasSize(2)))
-           .andExpect(jsonPath("$.failedIds", empty()));
+    @BeforeEach
+    void setUp() {
+        repo.deleteAll();
+        // name — это @Id в вашей сущности Timer
+        repo.saveAll(List.of(
+            new Timer("A", true),
+            new Timer("B", false),
+            new Timer("C", true)
+        ));
     }
 
     @Test
-    @DisplayName("resume: 206 Partial Content при частичном успехе")
-    void resume_partial() throws Exception {
-        var req = new IdsRequest(List.of("A","B","C"));
-        var res = new OperationResultDTO("PARTIAL", "2 resumed, 1 failed",
-                List.of("A","B"), List.of("C"));
+    void suspend_partial_success() throws Exception {
+        // A существует, Z нет → PARTIAL
+        var body = om.writeValueAsString(new IdsRequest(List.of("A", "Z")));
 
-        Mockito.when(timerService.resume(eq(req.ids()))).thenReturn(res);
+        mvc.perform(post("/api/timers/suspend")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+           .andExpect(status().is(206))
+           .andExpect(jsonPath("$.actionStatus").value("PARTIAL"))
+           .andExpect(jsonPath("$.message", containsString("suspended")))
+           .andExpect(jsonPath("$.processedIds", contains("A")))
+           .andExpect(jsonPath("$.failedIds", contains("Z")));
+
+        Assertions.assertFalse(repo.findById("A").orElseThrow().isActive());
+    }
+
+    @Test
+    void resume_successful() throws Exception {
+        // B был inactive → станет active
+        var body = om.writeValueAsString(new IdsRequest(List.of("B")));
 
         mvc.perform(post("/api/timers/resume")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(req)))
-           .andExpect(status().is(206))
-           .andExpect(jsonPath("$.status").value("PARTIAL"))
-           .andExpect(jsonPath("$.processedIds", containsInAnyOrder("A","B")))
-           .andExpect(jsonPath("$.failedIds", contains("C")));
+                .content(body))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.actionStatus").value("SUCCESSFUL"))
+           .andExpect(jsonPath("$.processedIds", contains("B")))
+           .andExpect(jsonPath("$.failedIds", empty()));
+
+        Assertions.assertTrue(repo.findById("B").orElseThrow().isActive());
     }
 
     @Test
-    @DisplayName("trigger: 400 Bad Request при полной ошибке")
-    void trigger_error() throws Exception {
-        var req = new IdsRequest(List.of("X","Y"));
-        var res = new OperationResultDTO("ERROR", "All operations failed",
-                List.of(), List.of("X","Y"));
-
-        Mockito.when(timerService.trigger(eq(req.ids()))).thenReturn(res);
+    void trigger_error_all_failed() throws Exception {
+        var body = om.writeValueAsString(new IdsRequest(List.of("XXX", "YYY")));
 
         mvc.perform(post("/api/timers/trigger")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(req)))
+                .content(body))
            .andExpect(status().isBadRequest())
-           .andExpect(jsonPath("$.status").value("ERROR"))
-           .andExpect(jsonPath("$.failedIds", hasSize(2)));
+           .andExpect(jsonPath("$.actionStatus").value("ERROR"))
+           .andExpect(jsonPath("$.processedIds", empty()))
+           .andExpect(jsonPath("$.failedIds", containsInAnyOrder("XXX","YYY")));
     }
 
     @Test
-    @DisplayName("Валидация: пустой список id -> 400 с сообщением")
-    void validation_emptyIds() throws Exception {
-        var req = new IdsRequest(List.of()); // пусто
+    void validation_empty_ids_returns_400() throws Exception {
+        var body = om.writeValueAsString(new IdsRequest(List.of()));
 
         mvc.perform(post("/api/timers/suspend")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(req)))
-           .andExpect(status().isBadRequest()); // далее можно добавить jsonPath на сообщение, если есть handler
+                .content(body))
+           .andExpect(status().isBadRequest())
+           // если у тебя есть @ControllerAdvice, можно дополнительно проверить message:
+           // .andExpect(jsonPath("$.message", containsString("must not be empty")))
+           ;
     }
 
     @Test
-    @DisplayName("Валидация: id из пробелов -> 400")
-    void validation_blankId() throws Exception {
-        var req = new IdsRequest(List.of("  "));
+    void validation_blank_id_returns_400() throws Exception {
+        var body = om.writeValueAsString(new IdsRequest(List.of("  ")));
 
-        mvc.perform(post("/api/timers/suspend")
+        mvc.perform(post("/api/timers/resume")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(om.writeValueAsString(req)))
+                .content(body))
            .andExpect(status().isBadRequest());
     }
 }
